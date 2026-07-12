@@ -1,0 +1,225 @@
+// ─────────────────────────────────────────────────────────────
+// Prisma Schema — AI Personal Planning Assistant
+// ─────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")  // required for migrations
+
+}
+
+// ─── Enums ────────────────────────────────────────────────────
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  CANCELLED
+  DEFERRED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskSource {
+  MANUAL
+  AI_EXTRACTED
+}
+
+enum CalendarEventSource {
+  MANUAL
+  AI_SCHEDULED
+  GOOGLE_CALENDAR
+  IMPORTED
+}
+
+enum AvailabilityType {
+  WORK        // normal working hours
+  PERSONAL    // personal free time available for scheduling
+  BLOCKED     // never schedule here
+}
+
+enum NotificationType {
+  TASK_REMINDER
+  TASK_OVERDUE
+  DAILY_AGENDA
+  SCHEDULING_SUGGESTION
+  TASK_COMPLETED
+}
+
+// ─── Models ───────────────────────────────────────────────────
+
+model User {
+  id String @id @default(uuid())
+
+  // Credentials
+  email    String  @unique
+  password String  // bcrypt hash
+  name     String
+  avatarUrl String? @map("avatar_url")
+
+  // Timezone & Day Profile
+  // Used by the scheduling engine and day-pattern learning
+  timezone      String  @default("UTC")
+  workStartTime String  @default("09:00") @map("work_start_time") // "HH:mm"
+  workEndTime   String  @default("17:00") @map("work_end_time")   // "HH:mm"
+  workDays      Int[]   @default([1, 2, 3, 4, 5])                 // 0=Sun … 6=Sat
+
+  // Scheduling preferences
+  preferredFocusStart  String? @map("preferred_focus_start") // e.g. "09:00"
+  preferredFocusEnd    String? @map("preferred_focus_end")   // e.g. "12:00"
+  bufferBetweenTasks   Int     @default(15) @map("buffer_between_tasks") // minutes
+
+  // Relations
+  tasks          Task[]
+  calendarEvents CalendarEvent[]
+  availabilities Availability[]
+  refreshTokens  RefreshToken[]
+  notifications  Notification[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  @@map("users")
+}
+
+model Task {
+  id          String       @id @default(uuid())
+  userId      String       @map("user_id")
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Core fields
+  title             String
+  description       String?
+  status            TaskStatus   @default(TODO)
+  priority          TaskPriority @default(MEDIUM)
+  estimatedDuration Int?         @map("estimated_duration")   // minutes
+  tags              String[]     @default([])
+  source            TaskSource   @default(MANUAL)
+
+  // Dates
+  dueDate        DateTime? @map("due_date")
+  scheduledStart DateTime? @map("scheduled_start")  // set by scheduling engine
+  scheduledEnd   DateTime? @map("scheduled_end")
+  completedAt    DateTime? @map("completed_at")
+
+  // Business hours constraint extracted by AI
+  businessHoursStart String? @map("business_hours_start") // "HH:mm"
+  businessHoursEnd   String? @map("business_hours_end")   // "HH:mm"
+
+  // Calendar event created for this task once scheduled
+  calendarEventId String?        @unique @map("calendar_event_id")
+  calendarEvent   CalendarEvent? @relation(fields: [calendarEventId], references: [id])
+
+  notifications Notification[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  @@index([userId])
+  @@index([userId, status])
+  @@index([userId, dueDate])
+  @@map("tasks")
+}
+
+model CalendarEvent {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  startTime   DateTime @map("start_time")
+  endTime     DateTime @map("end_time")
+  isAllDay    Boolean  @default(false) @map("is_all_day")
+  color       String?
+
+  // Recurrence
+  isRecurring    Boolean @default(false) @map("is_recurring")
+  recurrenceRule String? @map("recurrence_rule") // iCal RRULE string
+
+  // Source tracking
+  source     CalendarEventSource @default(MANUAL)
+  externalId String?             @map("external_id") // Google Calendar event id
+
+  // Back-reference to the task that owns this event
+  task Task?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  @@index([userId])
+  @@index([userId, startTime, endTime])
+  @@map("calendar_events")
+}
+
+// Per-day-of-week availability template
+// These are the USER'S ACTUAL patterns — the system learns them over time
+// dayOfWeek: 0=Sunday … 6=Saturday
+model Availability {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  dayOfWeek Int              @map("day_of_week")  // 0-6
+  startTime String           @map("start_time")   // "HH:mm"
+  endTime   String           @map("end_time")     // "HH:mm"
+  type      AvailabilityType @default(WORK)
+  label     String?                               // e.g. "Deep Work", "Gym", "Lunch"
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  @@index([userId, dayOfWeek])
+  @@map("availabilities")
+}
+
+model RefreshToken {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash  String   @unique @map("token_hash") // SHA-256 of the raw token
+  expiresAt  DateTime @map("expires_at")
+  isRevoked  Boolean  @default(false) @map("is_revoked")
+  userAgent  String?  @map("user_agent")
+  ipAddress  String?  @map("ip_address")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Notification {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  taskId String? @map("task_id")
+  task   Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  type     NotificationType
+  title    String
+  body     String
+  isRead   Boolean          @default(false) @map("is_read")
+  metadata Json?            // arbitrary extra data
+
+  scheduledFor DateTime? @map("scheduled_for")
+  sentAt       DateTime? @map("sent_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, isRead])
+  @@index([userId, scheduledFor])
+  @@map("notifications")
+}
