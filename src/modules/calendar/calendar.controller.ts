@@ -52,7 +52,6 @@ export class CalendarController {
   ) {
     return this.calendarService.getEvents(user.id, from, to);
   }
-
   @Get('events/busy')
   @ApiOperation({ summary: 'Get busy time slots in a range (for scheduling)' })
   @ApiQuery({ name: 'from', required: true, type: String })
