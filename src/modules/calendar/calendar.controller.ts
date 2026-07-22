@@ -61,7 +61,7 @@ export class CalendarController {
     @Query('from') from: string,
     @Query('to') to: string,
   ) {
-    return this.calendarService.getBusySlots(user.id, from, to);
+    return this.calendarService.getBusySlots(user.id, from, to);//todo
   }
 
   @Get('events/:id')
