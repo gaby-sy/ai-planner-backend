@@ -21,6 +21,7 @@ export interface AuthTokens {
   accessToken: string;
   refreshToken: string;
   expiresIn: number; // seconds
+  user: Omit<User, 'password'>;
 }
 
 @Injectable()
@@ -162,10 +163,13 @@ export class AuthService {
       },
     });
 
+    const { password: _pw, ...safeUser } = user;
+
     return {
       accessToken,
       refreshToken: rawRefresh,
       expiresIn: 15 * 60, // 15 minutes in seconds
+      user: safeUser,
     };
   }
 
