@@ -45,6 +45,7 @@
     "class-validator": "^0.15.1",
     "date-fns": "^3.6.0",
     "date-fns-tz": "^3.2.0",
+    "googleapis": "^174.0.1",
     "helmet": "^8.0.0",
     "openai": "^4.104.0",
     "passport": "^0.7.0",

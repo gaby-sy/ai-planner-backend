@@ -56,6 +56,13 @@ enum NotificationType {
   TASK_COMPLETED
 }
 
+enum GoogleCalendarSyncStatus {
+  NOT_CONNECTED
+  CONNECTED
+  SYNCING
+  ERROR
+}
+
 // ─── Models ───────────────────────────────────────────────────
 
 model User {
@@ -80,11 +87,13 @@ model User {
   bufferBetweenTasks   Int     @default(15) @map("buffer_between_tasks") // minutes
 
   // Relations
-  tasks          Task[]
-  calendarEvents CalendarEvent[]
-  availabilities Availability[]
-  refreshTokens  RefreshToken[]
-  notifications  Notification[]
+  tasks                     Task[]
+  calendarEvents            CalendarEvent[]
+  availabilities            Availability[]
+  refreshTokens             RefreshToken[]
+  passwordResetTokens       PasswordResetToken[]
+  notifications             Notification[]
+  googleCalendarIntegration GoogleCalendarIntegration?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt       @map("updated_at")
@@ -159,6 +168,7 @@ model CalendarEvent {
 
   @@index([userId])
   @@index([userId, startTime, endTime])
+  @@unique([userId, externalId])
   @@map("calendar_events")
 }
 
@@ -200,6 +210,21 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
+model PasswordResetToken {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String   @unique @map("token_hash") // SHA-256 of the raw token
+  expiresAt DateTime @map("expires_at")
+  isUsed    Boolean  @default(false) @map("is_used")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
 model Notification {
   id     String @id @default(uuid())
   userId String @map("user_id")
@@ -222,4 +247,32 @@ model Notification {
   @@index([userId, isRead])
   @@index([userId, scheduledFor])
   @@map("notifications")
+}
+
+// One row per user — tracks the Google Calendar OAuth connection & sync state.
+// Access/refresh tokens are stored encrypted (AES-256-GCM) and are never
+// serialized in API responses (see GoogleCalendarService#toView).
+model GoogleCalendarIntegration {
+  id     String @id @default(uuid())
+  userId String @unique @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status      GoogleCalendarSyncStatus @default(NOT_CONNECTED)
+  googleEmail String?                  @map("google_email")
+
+  // Encrypted at rest — see src/modules/google-calendar/utils/token-encryption.util.ts
+  accessTokenEnc  String?   @map("access_token_enc")
+  refreshTokenEnc String?   @map("refresh_token_enc")
+  tokenExpiresAt  DateTime? @map("token_expires_at")
+
+  googleCalendarId String? @default("primary") @map("google_calendar_id")
+  syncToken        String? @map("sync_token") // Google Calendar API incremental sync cursor
+
+  lastSyncedAt DateTime? @map("last_synced_at")
+  syncError    String?   @map("sync_error")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  @@map("google_calendar_integrations")
 }

@@ -11,6 +11,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { CalendarModule } from './modules/calendar/calendar.module';
+import { GoogleCalendarModule } from './modules/google-calendar/google-calendar.module';
 import { AiModule } from './modules/ai/ai.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -25,13 +26,13 @@ import { WebsocketModule } from './modules/websocket/websocket.module';
     ThrottlerModule.forRoot([
       {
         name: 'short',
-        ttl: 1000,   // 1 second
-        limit: 10,   // 10 requests per second
+        ttl: 1000, // 1 second
+        limit: 10, // 10 requests per second
       },
       {
         name: 'long',
-        ttl: 60000,  // 1 minute
-        limit: 100,  // 100 requests per minute
+        ttl: 60000, // 1 minute
+        limit: 100, // 100 requests per minute
       },
     ]),
 
@@ -62,6 +63,7 @@ import { WebsocketModule } from './modules/websocket/websocket.module';
     UsersModule,
     TasksModule,
     CalendarModule,
+    GoogleCalendarModule,
     AiModule,
     SchedulingModule,
     NotificationsModule,

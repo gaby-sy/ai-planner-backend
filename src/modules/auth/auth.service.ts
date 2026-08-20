@@ -2,6 +2,7 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -9,13 +10,17 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { User } from '@prisma/client';
 
 const BCRYPT_ROUNDS = 12;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL_DAYS = 30;
+const PASSWORD_RESET_TTL_HOURS = 1;
 
 export interface AuthTokens {
   accessToken: string;
@@ -32,6 +37,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly email: EmailService,
   ) {}
 
   // ─── Register ────────────────────────────────────────────────
@@ -131,6 +137,76 @@ export class AuthService {
     }
 
     return tokenRecord;
+  }
+
+  // ─── Forgot / Reset password ───────────────────────────────────
+
+  async requestPasswordReset(dto: ForgotPasswordDto): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
+
+    // Always behave the same way whether or not the email is registered, so
+    // this endpoint can't be used to enumerate valid accounts.
+    if (!user) {
+      this.logger.log(`Password reset requested for unknown email`);
+      return;
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = this.hashToken(rawToken);
+
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + PASSWORD_RESET_TTL_HOURS);
+
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    const clientUrl = this.config.get('CLIENT_URL') ?? 'http://localhost:4200';
+    const resetUrl = `${clientUrl}/auth/reset-password?token=${rawToken}`;
+
+    await this.email.sendPasswordResetEmail(user.email, resetUrl);
+    this.logger.log(`Password reset requested: ${user.id}`);
+  }
+
+  async resetPassword(dto: ResetPasswordDto): Promise<void> {
+    const tokenHash = this.hashToken(dto.token);
+    const tokenRecord = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+    });
+
+    if (
+      !tokenRecord ||
+      tokenRecord.isUsed ||
+      tokenRecord.expiresAt < new Date()
+    ) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+
+    await this.prisma.user.update({
+      where: { id: tokenRecord.userId },
+      data: { password: passwordHash },
+    });
+
+    await this.prisma.passwordResetToken.update({
+      where: { id: tokenRecord.id },
+      data: { isUsed: true },
+    });
+
+    // Reset invalidates all existing sessions for safety.
+    await this.prisma.refreshToken.updateMany({
+      where: { userId: tokenRecord.userId, isRevoked: false },
+      data: { isRevoked: true },
+    });
+
+    this.logger.log(`Password reset completed: ${tokenRecord.userId}`);
   }
 
   // ─── Private helpers ──────────────────────────────────────────
